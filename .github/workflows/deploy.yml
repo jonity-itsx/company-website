@@ -39,26 +39,75 @@ jobs:
         env:
           HEADSCALE_URL: ${{ secrets.HEADSCALE_URL }}
           HEADSCALE_API_KEY: ${{ secrets.HEADSCALE_API_KEY }}
-          HEADSCALE_USER_ID: ${{ vars.HEADSCALE_USER_ID }}
+          HEADSCALE_USER: ${{ vars.HEADSCALE_USER_ID }}
         run: |
           set -euo pipefail
 
           : "${HEADSCALE_URL:?HEADSCALE_URL is not configured}"
           : "${HEADSCALE_API_KEY:?HEADSCALE_API_KEY is not configured}"
-          : "${HEADSCALE_USER_ID:?HEADSCALE_USER_ID is not configured}"
+          : "${HEADSCALE_USER:?HEADSCALE_USER_ID is not configured}"
 
-          EXPIRATION="$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
-          URL="${HEADSCALE_URL%/}/api/v1/preauthkey"
+          BASE="${HEADSCALE_URL%/}"
 
-          # Headscale expects the user field as a numeric ID.
-          if ! [[ "$HEADSCALE_USER_ID" =~ ^[0-9]+$ ]]; then
-            echo "HEADSCALE_USER_ID must be a numeric Headscale user ID"
-            exit 1
+          BODY_FILE="$(mktemp)"
+          trap 'rm -f "$BODY_FILE"' EXIT
+
+          # Anropar Headscale-API:t. Skriver HTTP-statusen till stdout och
+          # svarskroppen till $BODY_FILE, sa att bada kan inspekteras.
+          hs_api() {
+            local method="$1" path="$2" data="${3:-}"
+            local args=(
+              -sS
+              -o "$BODY_FILE"
+              -w '%{http_code}'
+              -X "$method" "${BASE}${path}"
+              -H "Authorization: Bearer $HEADSCALE_API_KEY"
+              -H "Content-Type: application/json"
+            )
+            if [[ -n "$data" ]]; then
+              args+=(--data "$data")
+            fi
+            curl "${args[@]}" || true
+          }
+
+          # --- Slå upp numeriskt användar-ID ---
+          # HEADSCALE_USER_ID får vara antingen ett namn ("github-ci") eller
+          # ett numeriskt ID. Namn slås upp mot API:t.
+          if [[ "$HEADSCALE_USER" =~ ^[0-9]+$ ]]; then
+            USER_ID="$HEADSCALE_USER"
+            echo "HEADSCALE_USER_ID is already numeric: $USER_ID"
+          else
+            STATUS="$(hs_api GET /api/v1/user)"
+            USERS="$(cat "$BODY_FILE")"
+
+            if [[ "$STATUS" -lt 200 || "$STATUS" -ge 300 ]]; then
+              echo "Could not list Headscale users (HTTP $STATUS)"
+              echo "Response: $USERS"
+              exit 1
+            fi
+
+            USER_ID="$(
+              jq -r --arg name "$HEADSCALE_USER" \
+                '.users[]? | select(.name == $name) | .id' <<< "$USERS" \
+                | head -n1
+            )"
+
+            if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then
+              echo "No Headscale user named '$HEADSCALE_USER' was found."
+              echo "Available users:"
+              jq -r '.users[]? | "  id=\(.id) name=\(.name)"' <<< "$USERS"
+              exit 1
+            fi
+
+            echo "Resolved Headscale user '$HEADSCALE_USER' to id $USER_ID"
           fi
 
-          REQUEST_BODY="$(
+          # --- Skapa ephemeral preauthkey ---
+          EXPIRATION="$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
+
+          BODY_WITH_ID="$(
             jq -n \
-              --argjson user "$HEADSCALE_USER_ID" \
+              --argjson user "$USER_ID" \
               --arg expiration "$EXPIRATION" \
               '{
                 user: $user,
@@ -69,23 +118,33 @@ jobs:
               }'
           )"
 
-          RESPONSE_FILE="$(mktemp)"
-          HTTP_STATUS="$(
-            curl -sS \
-              -o "$RESPONSE_FILE" \
-              -w '%{http_code}' \
-              -X POST "$URL" \
-              -H "Authorization: Bearer $HEADSCALE_API_KEY" \
-              -H "Content-Type: application/json" \
-              --data "$REQUEST_BODY" \
-            || true
+          BODY_WITH_NAME="$(
+            jq -n \
+              --arg user "$HEADSCALE_USER" \
+              --arg expiration "$EXPIRATION" \
+              '{
+                user: $user,
+                ephemeral: true,
+                reusable: false,
+                expiration: $expiration,
+                aclTags: ["tag:github-runner"]
+              }'
           )"
 
-          RESPONSE="$(cat "$RESPONSE_FILE")"
-          rm -f "$RESPONSE_FILE"
+          STATUS="$(hs_api POST /api/v1/preauthkey "$BODY_WITH_ID")"
+          RESPONSE="$(cat "$BODY_FILE")"
 
-          if [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
-            echo "Headscale API returned HTTP $HTTP_STATUS"
+          # Headscale < 0.26 vill ha användarnamnet som strang i stallet for
+          # ett numeriskt ID. Forsok igen om ID-varianten avvisades.
+          if [[ "$STATUS" -ge 400 && "$STATUS" -lt 500 ]]; then
+            echo "Numeric user id was rejected (HTTP $STATUS): $RESPONSE"
+            echo "Retrying with the username, for older Headscale APIs."
+            STATUS="$(hs_api POST /api/v1/preauthkey "$BODY_WITH_NAME")"
+            RESPONSE="$(cat "$BODY_FILE")"
+          fi
+
+          if [[ "$STATUS" -lt 200 || "$STATUS" -ge 300 ]]; then
+            echo "Headscale API returned HTTP $STATUS"
             echo "Response: $RESPONSE"
             exit 1
           fi
@@ -94,7 +153,7 @@ jobs:
 
           echo "::add-mask::$EPHEMERAL_KEY"
           echo "key=$EPHEMERAL_KEY" >> "$GITHUB_OUTPUT"
-      
+
       - name: Connect to Headscale Mesh
         uses: tailscale/github-action@v4
         with:
