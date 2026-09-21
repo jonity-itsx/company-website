@@ -154,11 +154,14 @@ jobs:
           echo "::add-mask::$EPHEMERAL_KEY"
           echo "key=$EPHEMERAL_KEY" >> "$GITHUB_OUTPUT"
 
+      # Actionen skickar redan --accept-routes till "tailscale up", sa
+      # subnet-rutten fran jumphosten installeras utan att vi ber om det.
+      # Att upprepa flaggan har ger "flag provided multiple times".
       - name: Connect to Headscale Mesh
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ steps.generate_key.outputs.key }}
-          args: --login-server=${{ secrets.HEADSCALE_URL }} --accept-routes
+          args: --login-server=${{ secrets.HEADSCALE_URL }}
           version: 1.102.4
 
       - name: Verify connectivity to K3s node
