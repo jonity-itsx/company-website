@@ -33,33 +33,68 @@ jobs:
           docker push ${{ env.IMAGE }}
 
       # --- Network connectivity to K3s node ---
+
       - name: Generate Ephemeral Headscale Key
         id: generate_key
+        env:
+          HEADSCALE_URL: ${{ secrets.HEADSCALE_URL }}
+          HEADSCALE_API_KEY: ${{ secrets.HEADSCALE_API_KEY }}
+          HEADSCALE_USER_ID: ${{ vars.HEADSCALE_USER_ID }}
         run: |
-          EXPIRATION=$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)
+          set -euo pipefail
 
-          RESPONSE=$(curl -s -f -X POST "${{ secrets.HEADSCALE_URL }}/api/v1/preauthkey" \
-            -H "Authorization: Bearer ${{ secrets.HEADSCALE_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-                  "user": ${{ vars.HEADSCALE_USER_ID }},
-                  "ephemeral": true,
-                  "reusable": false,
-                  "expiration": "'"$EXPIRATION"'",
-                  "aclTags": ["tag:github-runner"]
-                }')
+          : "${HEADSCALE_URL:?HEADSCALE_URL is not configured}"
+          : "${HEADSCALE_API_KEY:?HEADSCALE_API_KEY is not configured}"
+          : "${HEADSCALE_USER_ID:?HEADSCALE_USER_ID is not configured}"
 
-          EPHEMERAL_KEY=$(echo "$RESPONSE" | jq -r '.preAuthKey.key')
+          EXPIRATION="$(date -u -d '+10 minutes' '+%Y-%m-%dT%H:%M:%SZ')"
+          URL="${HEADSCALE_URL%/}/api/v1/preauthkey"
 
-          if [ -z "$EPHEMERAL_KEY" ] || [ "$EPHEMERAL_KEY" == "null" ]; then
-            echo "Error: Failed to retrieve key from Headscale API"
+          # Headscale expects the user field as a numeric ID.
+          if ! [[ "$HEADSCALE_USER_ID" =~ ^[0-9]+$ ]]; then
+            echo "HEADSCALE_USER_ID must be a numeric Headscale user ID"
+            exit 1
+          fi
+
+          REQUEST_BODY="$(
+            jq -n \
+              --argjson user "$HEADSCALE_USER_ID" \
+              --arg expiration "$EXPIRATION" \
+              '{
+                user: $user,
+                ephemeral: true,
+                reusable: false,
+                expiration: $expiration,
+                aclTags: ["tag:github-runner"]
+              }'
+          )"
+
+          RESPONSE_FILE="$(mktemp)"
+          HTTP_STATUS="$(
+            curl -sS \
+              -o "$RESPONSE_FILE" \
+              -w '%{http_code}' \
+              -X POST "$URL" \
+              -H "Authorization: Bearer $HEADSCALE_API_KEY" \
+              -H "Content-Type: application/json" \
+              --data "$REQUEST_BODY" \
+            || true
+          )"
+
+          RESPONSE="$(cat "$RESPONSE_FILE")"
+          rm -f "$RESPONSE_FILE"
+
+          if [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
+            echo "Headscale API returned HTTP $HTTP_STATUS"
             echo "Response: $RESPONSE"
             exit 1
           fi
 
-          echo "::add-mask::$EPHEMERAL_KEY"
-          echo "key=$EPHEMERAL_KEY" >> $GITHUB_OUTPUT
+          EPHEMERAL_KEY="$(jq -er '.preAuthKey.key' <<< "$RESPONSE")"
 
+          echo "::add-mask::$EPHEMERAL_KEY"
+          echo "key=$EPHEMERAL_KEY" >> "$GITHUB_OUTPUT"
+      
       - name: Connect to Headscale Mesh
         uses: tailscale/github-action@v4
         with:
