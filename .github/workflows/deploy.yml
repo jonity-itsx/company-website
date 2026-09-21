@@ -158,17 +158,45 @@ jobs:
         uses: tailscale/github-action@v4
         with:
           authkey: ${{ steps.generate_key.outputs.key }}
-          args: --login-server=${{ secrets.HEADSCALE_URL }}
+          args: --login-server=${{ secrets.HEADSCALE_URL }} --accept-routes
           version: 1.102.4
 
       - name: Verify connectivity to K3s node
+        env:
+          K3S_HOST: 10.0.${{ vars.TEAM_ID }}.3
         run: |
-          ping -c 3 10.0.${{ vars.TEAM_ID }}.3
-          echo "Tailscale connectivity confirmed"
+          set -euo pipefail
+
+          # Subnet-rutten kommer via jumphosten och kan dröja nagra sekunder
+          # efter att tailscale kommit upp.
+          for attempt in $(seq 1 15); do
+            if timeout 3 bash -c "</dev/tcp/${K3S_HOST}/6443" 2>/dev/null; then
+              echo "Reached ${K3S_HOST}:6443 on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Could not reach ${K3S_HOST}:6443 after 15 attempts."
+          echo "Installed routes:"
+          ip route
+          echo "Tailscale status:"
+          tailscale status || true
+          exit 1
 
       # --- Configure kubectl for remote k3s ---
       - name: Configure kubeconfig
+        env:
+          K3S_HOST: 10.0.${{ vars.TEAM_ID }}.3
+          K3S_NAME: team${{ vars.TEAM_ID }}-primary
         run: |
+          set -euo pipefail
+
+          # KUBECONFIG pekar pa https://team<N>-primary:6443, vilket ar namnet
+          # i k3s-certifikatets SAN-lista. Runnern kan inte sla upp det -- bara
+          # jumphosten finns i tailnetets DNS -- sa peka namnet pa nodens IP.
+          echo "${K3S_HOST} ${K3S_NAME}" | sudo tee -a /etc/hosts > /dev/null
+
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG }}" | base64 -d > ~/.kube/config
           chmod 600 ~/.kube/config
