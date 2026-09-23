@@ -6,7 +6,7 @@ on:
     branches: [ "main" ]
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}:latest
+  IMAGE_REPO: ghcr.io/${{ github.repository }}
 
 jobs:
   deploy:
@@ -14,6 +14,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write          # OIDC för keyless Cosign
 
     steps:
       - name: Checkout Code
@@ -27,10 +28,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
       - name: Build and push image
+        id: build
         run: |
-          docker build -t ${{ env.IMAGE }} .
-          docker push ${{ env.IMAGE }}
+          SHORT_SHA="${GITHUB_SHA::7}"
+          docker build -t "$IMAGE_REPO:latest" -t "$IMAGE_REPO:$SHORT_SHA" .
+          docker push --all-tags "$IMAGE_REPO"
+          DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE_REPO:$SHORT_SHA")"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the image
+        run: cosign sign --yes "${{ steps.build.outputs.digest }}"
 
       # --- Network connectivity to K3s node ---
 
@@ -208,7 +219,7 @@ jobs:
       # --- Deploy to K3s ---
       - name: Apply manifests and update image
         run: |
-          export DEPLOY_IMAGE="${{ env.IMAGE }}"
+          export DEPLOY_IMAGE="${{ steps.build.outputs.digest }}"
           envsubst < k8s/deployment.yaml > /tmp/deployment.yaml
           kubectl apply -f /tmp/deployment.yaml -f k8s/pvc.yaml -f k8s/service.yaml
           kubectl rollout status deployment/company-website --timeout=120s
