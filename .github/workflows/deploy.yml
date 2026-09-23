@@ -4,6 +4,16 @@ on:
   workflow_dispatch:
   push:
     branches: [ "main" ]
+    # Filer som inte byggs in i imagen och inte appliceras av CI. Om en push
+    # bara rör dessa behövs ingen ny image eller deploy.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "helm/**"
+      - "k8s/kyverno-policy.yaml"
+      - "k8s/github-permissions.yaml"
+      - "docker-compose.yml"
+      - ".env.example"
 
 env:
   IMAGE_REPO: ghcr.io/${{ github.repository }}
