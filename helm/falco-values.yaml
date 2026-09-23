@@ -1,0 +1,21 @@
+driver:
+  kind: modern_ebpf
+
+tty: true
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 160Mi
+  limits:
+    memory: 400Mi
+
+falcosidekick:
+  enabled: true
+  replicaCount: 1        # standard är 2; en räcker och sparar minne
+  webui:
+    enabled: false
+  config:
+    existingSecret: falcosidekick-discord
+    discord:
+      minimumpriority: notice   # "Terminal shell in container" är notice
