@@ -53,6 +53,26 @@ jobs:
       - name: Sign the image
         run: cosign sign --yes "${{ steps.build.outputs.digest }}"
 
+      # --- SBOM ---
+      # Syft listar alla paket i imagen (Debian + Python) i CycloneDX-format.
+      # Actionen laddar även upp filen som artefakt i körningen.
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: sbom-${{ github.sha }}.cdx.json
+
+      # Signerad attestation: SBOM:en knyts till exakt den här digesten och
+      # hamnar i GHCR bredvid imagen och signaturen.
+      - name: Attest SBOM
+        run: |
+          cosign attest --yes \
+            --type cyclonedx \
+            --predicate sbom.cdx.json \
+            "${{ steps.build.outputs.digest }}"
+
       # --- Network connectivity to K3s node ---
 
       - name: Generate Ephemeral Headscale Key
