@@ -7,7 +7,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-  - host: company-website.team-name.arpa
+  - host: company-website.jonity.arpa
     http:
       paths:
       - path: /
