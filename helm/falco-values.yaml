@@ -20,11 +20,11 @@ falcosidekick:
     discord:
       minimumpriority: notice   # "Terminal shell in container" är notice
 
-falco:
-  # Falcosidekick visar i Discord hela larmtexten och sedan varje fält i en
-  # egen ruta, så allt syns två gånger. Utan output_fields blir det bara
-  # texten plus regel, prioritet, källa, värd, taggar och tid.
-  json_include_output_fields_property: false
+# Falcosidekick visar i Discord hela larmtexten och sedan varje fält i en
+# egen ruta, så allt syns två gånger. Det går INTE att ändra med Falcos
+# json_include_output_fields_property: false. Sidekick avvisar då varje larm
+# (HTTP 400, utan att logga något), eftersom den kräver output_fields.
+# Provat 2026-09-30, och inga larm nådde Discord förrän det togs bort.
 
 customRules:
   # Egen regel: sudo direkt på noden, utanför containrar. Falco ser hela värden
