@@ -14,6 +14,9 @@ on:
       - "k8s/github-permissions.yaml"
       - "docker-compose.yml"
       - ".env.example"
+      - "scanner/**"
+      - "k8s/scanner/**"
+      - ".github/workflows/scanner-image.yml"
 
 env:
   IMAGE_REPO: ghcr.io/${{ github.repository }}

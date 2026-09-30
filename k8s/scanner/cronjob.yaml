@@ -1,0 +1,80 @@
+# Daglig sårbarhetsskanning av den image som kör i default.
+# Discord-webhooken ligger i secreten sbom-scanner-discord, som skapas för hand
+# och inte finns i git. Se docs/workshop-4.md, punkt 7.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sbom-vulnerability-scanner
+  namespace: security-tools
+spec:
+  schedule: "0 6 * * *"
+  timeZone: Europe/Stockholm
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 900
+      template:
+        spec:
+          serviceAccountName: sbom-scanner
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: scanner
+            # Digesten skrivs ut av scanner-image.yml efter varje bygge.
+            image: ghcr.io/jonity-itsx/sbom-scanner@sha256:DIGEST_FRAN_WORKFLOWEN
+            env:
+            - name: WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sbom-scanner-discord
+                  key: webhook-url
+            - name: TARGET_NAMESPACE
+              value: default
+            - name: LABEL_SELECTOR
+              value: app=company-website
+            # Samma identitet som i k8s/image-policy.yaml.
+            - name: CERT_IDENTITY_REGEXP
+              value: ^https://github\.com/jonity-itsx/company-website/\.github/workflows/deploy\.yml@.*$
+            - name: CERT_OIDC_ISSUER
+              value: https://token.actions.githubusercontent.com
+            - name: HOME
+              value: /tmp
+            - name: TRIVY_CACHE_DIR
+              value: /cache
+            # Får Go att städa minnet innan gränsen nedan nås (noden har
+            # bara ~500 MB ledigt, F7).
+            - name: GOMEMLIMIT
+              value: 400MiB
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            resources:
+              requests:
+                cpu: 50m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /cache
+          volumes:
+          - name: tmp
+            emptyDir:
+              sizeLimit: 256Mi
+          - name: cache
+            emptyDir:
+              sizeLimit: 2Gi
