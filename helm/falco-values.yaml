@@ -19,3 +19,41 @@ falcosidekick:
     existingSecret: falcosidekick-discord
     discord:
       minimumpriority: notice   # "Terminal shell in container" är notice
+
+falco:
+  # Falcosidekick visar i Discord hela larmtexten och sedan varje fält i en
+  # egen ruta, så allt syns två gånger. Utan output_fields blir det bara
+  # texten plus regel, prioritet, källa, värd, taggar och tid.
+  json_include_output_fields_property: false
+
+customRules:
+  # Egen regel: sudo direkt på noden, utanför containrar. Falco ser hela värden
+  # via eBPF, men standardreglerna larmar främst om det som händer i containrar.
+  # Inloggningar på primary rapporteras inte (jumphostens Discord-loggning i
+  # terraform-infra gäller bara jumphosten), så det här är det enda larmet
+  # när någon gör något med root på noden. cmd tar med hela kommandoraden:
+  # ge aldrig lösenord eller tokens som argument till sudo (F34).
+  team-rules.yaml: |-
+    - rule: Sudo on host
+      desc: Någon kör sudo direkt på noden
+      condition: spawned_process and container.id = host and proc.name = sudo
+      output: >
+        sudo på noden (user=%user.name loginuid=%user.loginuid
+        cmd=%proc.cmdline parent=%proc.pname)
+      priority: NOTICE
+      tags: [host, team4]
+
+  # Skannern i security-tools (k8s/scanner/) frågar API-servern varje dag, och
+  # det är just vad regeln larmar på. Undantaget gäller bara den imagen i det
+  # namespacet, där policy-controller bara släpper in images signerade av
+  # scanner-image.yml.
+  sbom-scanner-exceptions.yaml: |-
+    - rule: Contact K8S API Server From Container
+      exceptions:
+        - name: sbom_scanner
+          fields: [k8s.ns.name, container.image.repository]
+          comps: ["=", "="]
+          values:
+            - [security-tools, ghcr.io/jonity-itsx/sbom-scanner]
+      override:
+        exceptions: append
