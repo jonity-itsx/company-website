@@ -1,0 +1,9 @@
+# Eget namespace för skannern. Det omfattas av samma signaturkontroll som
+# default och kräver Kubernetes strängaste säkerhetsprofil för poddar.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security-tools
+  labels:
+    policy.sigstore.dev/include: "true"
+    pod-security.kubernetes.io/enforce: restricted

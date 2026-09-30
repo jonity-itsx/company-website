@@ -1,0 +1,15 @@
+# Bara scanner-images som signerats av scanner-image.yml på main får köras.
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata:
+  name: verify-sbom-scanner
+spec:
+  mode: enforce
+  images:
+  - glob: ghcr.io/jonity-itsx/sbom-scanner**
+  authorities:
+  - name: scanner-workflow
+    keyless:
+      identities:
+      - issuer: https://token.actions.githubusercontent.com
+        subjectRegExp: ^https://github\.com/jonity-itsx/company-website/\.github/workflows/scanner-image\.yml@refs/heads/main$
