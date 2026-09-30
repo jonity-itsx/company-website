@@ -17,13 +17,17 @@ STEP="start"
 
 # Skickar ett meddelande till Discord: titel, text, färg och valfri bilaga.
 # jq bygger JSON:en, så citattecken och radbrytningar i texten blir rätt.
+# Webhook-URL:en går till curl via stdin (-K -), inte som argument, eftersom
+# argument syns för alla som ser processlistan, t.ex. Falco (F33).
 notify() {
   payload=$(jq -n --arg t "$1" --arg d "$2" --argjson c "$3" --arg f "$FOOTER" \
     '{embeds: [{title: $t, description: $d, color: $c, footer: {text: $f}}]}')
   if [ -n "${4:-}" ]; then
-    curl -fsS -o /dev/null -F "payload_json=$payload" -F "file=@$4" "$WEBHOOK_URL"
+    printf 'url = "%s"\n' "$WEBHOOK_URL" \
+      | curl -fsS -K - -o /dev/null -F "payload_json=$payload" -F "file=@$4"
   else
-    curl -fsS -o /dev/null -H "Content-Type: application/json" -d "$payload" "$WEBHOOK_URL"
+    printf 'url = "%s"\n' "$WEBHOOK_URL" \
+      | curl -fsS -K - -o /dev/null -H "Content-Type: application/json" -d "$payload"
   fi
 }
 
@@ -43,13 +47,15 @@ Loggen: \`kubectl logs -n security-tools ${HOSTNAME:-<pod>}\`" \
 trap on_exit EXIT
 
 # 1. Vilka images kör just nu? Samma fråga som "kubectl get pods -l ...",
-#    ställd direkt mot API:t med poddens ServiceAccount-token.
+#    ställd direkt mot API:t med poddens ServiceAccount-token. Token går via
+#    stdin av samma skäl som webhooken. printf är inbyggt i skalet och syns
+#    inte som en egen process.
 STEP="hämta poddar med ${LABEL_SELECTOR} i ${TARGET_NAMESPACE}"
 SA=/var/run/secrets/kubernetes.io/serviceaccount
-curl -fsS -G --cacert "$SA/ca.crt" \
-  -H "Authorization: Bearer $(cat "$SA/token")" \
-  --data-urlencode "labelSelector=${LABEL_SELECTOR}" \
-  "https://kubernetes.default.svc/api/v1/namespaces/${TARGET_NAMESPACE}/pods" \
+printf 'header = "Authorization: Bearer %s"\n' "$(cat "$SA/token")" \
+  | curl -fsS -G -K - --cacert "$SA/ca.crt" \
+      --data-urlencode "labelSelector=${LABEL_SELECTOR}" \
+      "https://kubernetes.default.svc/api/v1/namespaces/${TARGET_NAMESPACE}/pods" \
   > "$WORK/pods.json"
 
 # imageID är den digest som containerd faktiskt startade, inte taggen i
