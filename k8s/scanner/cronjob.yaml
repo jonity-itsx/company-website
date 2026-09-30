@@ -30,7 +30,7 @@ spec:
           containers:
           - name: scanner
             # Digesten skrivs ut av scanner-image.yml efter varje bygge.
-            image: ghcr.io/jonity-itsx/sbom-scanner@sha256:DIGEST_FRAN_WORKFLOWEN
+            image: ghcr.io/jonity-itsx/sbom-scanner@sha256:7cb6ecc33eb645889e50ae462840baaf05f80b13ace245ff3bf07d2fdae45810
             env:
             - name: WEBHOOK_URL
               valueFrom:
