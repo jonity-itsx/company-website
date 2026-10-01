@@ -9,7 +9,10 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# pip behövs bara vid bygget. Det tas bort i samma lager, så att pip och
+# biblioteken det har inbakade inte följer med i imagen som kör (F56).
+RUN pip install --no-cache-dir -r requirements.txt \
+ && pip uninstall -y pip
 
 COPY . .
 
