@@ -89,7 +89,14 @@ jobs:
             --type cyclonedx \
             --predicate sbom.cdx.json \
             "${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}"
-
+      
+      #Trivy scannar imagen efter sårbarheter
+      - name: Trivy scan of Image
+        uses: aquasecurity/trivy-action@master 
+        with:
+          image-ref: ${{ env.IMAGE_REPO }} 
+          exit-code: 0
+          severity: 'Critical,HIHG'
       # --- Network connectivity to K3s node ---
 
       - name: Generate Ephemeral Headscale Key
