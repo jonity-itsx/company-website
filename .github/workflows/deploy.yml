@@ -95,6 +95,9 @@ jobs:
         uses: aquasecurity/trivy-action@master 
         with:
           image-ref: ${{ env.IMAGE_REPO }} 
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results.sarif'
           exit-code: 0
           severity: 'CRITICAL,HIGH'
 
