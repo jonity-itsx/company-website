@@ -96,7 +96,7 @@ jobs:
         with:
           image-ref: ${{ env.IMAGE_REPO }} 
           exit-code: 0
-          severity: 'Critical,HIHG'
+          severity: 'Critical,HIGH'
       # --- Network connectivity to K3s node ---
 
       - name: Generate Ephemeral Headscale Key
