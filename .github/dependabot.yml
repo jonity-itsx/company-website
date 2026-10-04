@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  # Basimagen i Dockerfile är låst med digest. Dependabot föreslår ny digest
+  # för python:3.13-slim, så att basen inte blir stående. Debians
+  # säkerhetsfixar kommer ändå med vid varje bygge via apt-get upgrade.
+  # Gäller bara Dockerfile i roten. scanner/Dockerfile uppdateras för hand,
+  # eftersom en ny skannerimage också kräver ny digest i
+  # k8s/scanner/cronjob.yaml.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+
+  # Actions i workflows är taggade, inte låsta med commit-SHA. Dependabot
+  # öppnar en PR per uppgradering, så de kan granskas en i taget.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
