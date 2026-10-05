@@ -9,6 +9,9 @@ RUN apt-get update \
  && apt-get upgrade -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 
+RUN useradd --create-home --shell /bin/bash appuser
+
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -17,11 +20,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
  && pip uninstall -y pip
 
-COPY . .
+COPY --chown=appuser:appuser . .
+
 
 ENV PYTHONPATH=/app/src
 ENV FLASK_APP=company_website
 
+USER appuser
 EXPOSE 7000
 
 CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:7000", "--access-logfile", "-", "wsgi:app"]
