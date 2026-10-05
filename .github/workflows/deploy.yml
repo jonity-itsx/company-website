@@ -52,16 +52,68 @@ jobs:
             type=raw,value=latest
             type=sha,format=short
 
-      # steps.build.outputs.digest är bara "sha256:…", så senare steg sätter
-      # IMAGE_REPO@ framför för att få en fullständig referens.
-      - name: Build and push Docker image
-        id: build
+      # Imagen byggs bara lokalt i runnern. Den pushas först när Trivy har
+      # godkänt den, och då exakt den som skannades, inte ett nytt bygge.
+      - name: Build Docker image
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
+          push: false
+          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # --- Sårbarhetsskanning före push ---
+      # Trivy hämtas som binär med fast version och kontrollerad checksumma,
+      # samma som i scanner/Dockerfile. trivy-action@master kör kod från en
+      # gren som kan ändras, i ett jobb med id-token och Headscale-nyckeln.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: 0.74.0
+          TRIVY_SHA256: 2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP/bin" trivy
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      # Alla HIGH och CRITICAL, även de utan fix, till Security-fliken.
+      # --image-src docker: skanna den lokala imagen, aldrig :latest i GHCR.
+      - name: Trivy report
+        run: |
+          trivy image --image-src docker \
+            --severity CRITICAL,HIGH \
+            --format sarif --output trivy-results.sarif \
+            "${{ env.IMAGE_REPO }}:latest"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      # Spärren: HIGH eller CRITICAL som har en fix stoppar bygget innan
+      # imagen pushas. Fynd utan fix kan vi inte åtgärda, de syns i
+      # Security-fliken och i den dagliga SBOM-skanningen.
+      - name: Trivy gate
+        run: |
+          trivy image --image-src docker --skip-db-update \
+            --severity CRITICAL,HIGH --ignore-unfixed \
+            --exit-code 1 \
+            "${{ env.IMAGE_REPO }}:latest"
+
+      # Båda taggarna pekar på samma image och får samma digest.
+      # steps.push.outputs.digest är bara "sha256:…", så senare steg sätter
+      # IMAGE_REPO@ framför för att få en fullständig referens.
+      - name: Push Docker image
+        id: push
+        run: |
+          set -euo pipefail
+          docker push --all-tags "${{ env.IMAGE_REPO }}"
+          ref=$(docker image inspect --format '{{index .RepoDigests 0}}' "${{ env.IMAGE_REPO }}:latest")
+          echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v4.1.0
@@ -69,7 +121,7 @@ jobs:
           cosign-release: 'v2.6.4'
 
       - name: Sign images with Cosign
-        run: cosign sign --yes "${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}"
+        run: cosign sign --yes "${{ env.IMAGE_REPO }}@${{ steps.push.outputs.digest }}"
 
       # --- SBOM ---
       # Syft listar alla paket i imagen (Debian + Python) i CycloneDX-format.
@@ -77,7 +129,7 @@ jobs:
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}
+          image: ${{ env.IMAGE_REPO }}@${{ steps.push.outputs.digest }}
           format: cyclonedx-json
           output-file: sbom.cdx.json
           artifact-name: sbom-${{ github.sha }}.cdx.json
@@ -89,23 +141,8 @@ jobs:
           cosign attest --yes \
             --type cyclonedx \
             --predicate sbom.cdx.json \
-            "${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}"
-      
-      #Trivy scannar imagen efter sårbarheter
-      - name: Trivy scan of Image
-        uses: aquasecurity/trivy-action@master 
-        with:
-          image-ref: ${{ env.IMAGE_REPO }} 
-          format: 'template'
-          template: '@/contrib/sarif.tpl'
-          output: 'trivy-results.sarif'
-          exit-code: 0
-          severity: 'CRITICAL,HIGH'
+            "${{ env.IMAGE_REPO }}@${{ steps.push.outputs.digest }}"
 
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-results.sarif'
       # --- Network connectivity to K3s node ---
 
       - name: Generate Ephemeral Headscale Key
@@ -282,7 +319,7 @@ jobs:
       # --- Deploy to K3s ---
       - name: Apply manifests and update image
         run: |
-          export DEPLOY_IMAGE="${{ env.IMAGE_REPO }}@${{ steps.build.outputs.digest }}"
+          export DEPLOY_IMAGE="${{ env.IMAGE_REPO }}@${{ steps.push.outputs.digest }}"
           export GIT_COMMIT="${{ github.sha }}"
           envsubst < k8s/deployment.yaml > /tmp/deployment.yaml
           kubectl apply -f /tmp/deployment.yaml -f k8s/pvc.yaml -f k8s/service.yaml -f k8s/ingress.yaml
